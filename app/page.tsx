@@ -152,7 +152,12 @@ export default function Home() {
     onChunk: (text: string) => void
   ) => {
     const res = await fetch(url, options);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      let detail = body;
+      try { detail = JSON.parse(body).error ?? body; } catch { /* ignore */ }
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
     const reader = res.body?.getReader();
     if (!reader) throw new Error('No response body');
     const decoder = new TextDecoder();
