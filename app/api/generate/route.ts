@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 import OpenAI from 'openai';
+import pdfParse from 'pdf-parse/lib/pdf-parse';
 import { SYSTEM_PROMPT } from '@/app/lib/prompts';
 
 export const maxDuration = 300;
 
 async function extractPdfText(file: File): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer());
-  const { default: pdfParse } = await import('pdf-parse');
   const data = await pdfParse(buffer);
   return data.text;
 }
@@ -141,9 +141,10 @@ ${historySection}
       },
     });
   } catch (error) {
-    console.error('Generate error:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Generate error:', message);
     return new Response(
-      JSON.stringify({ error: '제안서 생성 중 오류가 발생했습니다.' }),
+      JSON.stringify({ error: `제안서 생성 중 오류: ${message}` }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
