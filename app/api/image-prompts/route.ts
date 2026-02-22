@@ -3,25 +3,31 @@ import OpenAI from 'openai';
 
 export const maxDuration = 120;
 
-const SYSTEM_PROMPT = `당신은 PPT 디자인 전문가입니다.
-제안서 내용을 보고, 제안서에 삽입할 이미지에 대한 영문 이미지 생성 프롬프트를 작성합니다.
+const SYSTEM_PROMPT = `당신은 특허/IP R&D 제안서 전문 PPT 디자이너입니다.
+제안서 내용을 분석하여, 각 섹션에 삽입할 이미지에 대해 매우 구체적인 제작 지침을 제공합니다.
 
-[이미지 방향성]
-- 사람이 직접 PowerPoint나 Keynote로 만든 것처럼 보이는 스타일
-- AI가 생성한 티가 나지 않도록: 지나치게 완벽한 조명, 과도한 디테일, 사실적 질감 배제
-- flat design, simple icon-style illustration, clean infographic, geometric shapes 계열
-- 색상은 파란색/회색/흰색 계열의 전문적이고 절제된 팔레트
-- 기술/특허/IP 관련 비즈니스 문서에 어울리는 분위기
+[이미지 스타일 원칙]
+- 사람이 PowerPoint에서 도형·아이콘·텍스트박스로 직접 만든 느낌
+- AI 생성 티 절대 금지: 사실적 질감, 과도한 빛/그림자, 사진 합성 배제
+- flat design, simple geometric shape, clean infographic, icon illustration
+- 색상: 남색(#1E3A5F) + 포인트 청색(#2E86C1) + 흰색 + 연회색 조합
+- 폰트: 굵은 고딕 계열, 영문은 sans-serif
 
-[출력 형식]
-제안서 섹션별로 2~3개의 이미지 프롬프트를 제안합니다.
-각 프롬프트는 아래 형식으로 작성합니다:
+[출력 형식 — 이미지당 반드시 아래 항목을 모두 작성]
 
-**[섹션명 / 이미지 용도]**
+■ 삽입 위치: (제안서의 정확한 섹션명과 위치. 예: "Ⅲ-1 기술전문성 본문 상단 오른쪽")
+■ 이미지 유형: (예: 프로세스 다이어그램 / 기술 트리 표 / 비교 인포그래픽 / 아이콘 블록 등)
+■ 레이아웃 구조: (도형 배치, 화살표 방향, 컬럼 수 등 구체적 배치 설명)
+■ 들어갈 텍스트/레이블: (이미지 안에 실제로 적힐 텍스트를 모두 나열)
+■ 이미지 생성 프롬프트 (영문):
 \`\`\`
-(영문 이미지 생성 프롬프트)
+(DALL-E / Midjourney용 영문 프롬프트)
 \`\`\`
-- 용도 설명: (해당 이미지가 어디에 들어가면 좋은지 한 줄 설명)`;
+■ 한줄 설명: (이 이미지가 왜 이 자리에 필요한지)
+
+---
+제안서 섹션(S1~S4) 전체를 커버하여 총 4~6개의 이미지를 제안하세요.
+각 이미지는 제안서를 읽는 평가위원의 눈길을 멈추게 하고, 아이피랩의 전문성을 시각적으로 강화해야 합니다.`;
 
 export async function POST(request: NextRequest) {
   const client = new OpenAI();
@@ -37,12 +43,20 @@ export async function POST(request: NextRequest) {
 
     const stream = await client.chat.completions.create({
       model: 'gpt-4o',
-      max_tokens: 2048,
+      max_tokens: 4096,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         {
           role: 'user',
-          content: `아래 제안서를 보고, 제안서를 돋보이게 할 이미지 프롬프트를 섹션별로 제안해주세요.\n사람이 PPT로 만든 느낌이 나도록, AI티가 나지 않는 스타일로 작성해주세요.\n\n[제안서]\n${draft.slice(0, 6000)}`,
+          content: `아래 제안서를 분석하여, 각 섹션에 삽입할 이미지를 제안해주세요.
+
+요구사항:
+1. 삽입 위치(섹션명+위치), 이미지 유형, 레이아웃 구조, 이미지 안에 들어갈 실제 텍스트/레이블, 영문 생성 프롬프트를 모두 구체적으로 작성
+2. "이미지 안에 들어갈 텍스트"는 제안서 내용에서 실제 키워드/수치/기업명을 그대로 사용
+3. 사람이 PPT 도형으로 만든 느낌, AI 생성 티 없는 스타일
+
+[제안서]
+${draft.slice(0, 8000)}`,
         },
       ],
       stream: true,
