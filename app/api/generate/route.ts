@@ -1,23 +1,35 @@
 import { NextRequest } from 'next/server';
 import OpenAI from 'openai';
-import pdfParse from 'pdf-parse/lib/pdf-parse';
 import { SYSTEM_PROMPT } from '@/app/lib/prompts';
 
 export const maxDuration = 300;
 
-async function extractPdfText(file: File): Promise<string> {
+type FileContentPart = {
+  type: 'file';
+  file: { filename: string; file_data: string };
+};
+
+type TextContentPart = {
+  type: 'text';
+  text: string;
+};
+
+async function toBase64Part(file: File): Promise<FileContentPart> {
   const buffer = Buffer.from(await file.arrayBuffer());
-  const data = await pdfParse(buffer);
-  return data.text;
+  const base64 = buffer.toString('base64');
+  const mime = file.type || 'application/pdf';
+  return {
+    type: 'file',
+    file: {
+      filename: file.name,
+      file_data: `data:${mime};base64,${base64}`,
+    },
+  };
 }
 
-async function extractFileText(file: File): Promise<string> {
-  const ext = file.name.split('.').pop()?.toLowerCase();
-  if (ext === 'pdf') {
-    return extractPdfText(file);
-  }
+async function toTextPart(file: File): Promise<string> {
   const buffer = Buffer.from(await file.arrayBuffer());
-  return buffer.toString('utf-8');
+  return `[${file.name}]\n${buffer.toString('utf-8').slice(0, 20000)}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -27,92 +39,87 @@ export async function POST(request: NextRequest) {
     const technologyDomain = formData.get('technologyDomain') as string;
     const historyText = (formData.get('historyText') as string) || '';
 
-    // ① 수요기업 기술자료(RFP) — 필수
+    const contentParts: (FileContentPart | TextContentPart)[] = [];
+    const textSections: string[] = [];
+
+    // ① 수요기업 기술자료(RFP) — PDF → GPT에 직접 전달
     const rfpFiles = formData.getAll('rfpFiles') as File[];
-    let rfpSection = '';
-    if (rfpFiles.length > 0) {
-      const texts: string[] = [];
-      for (const file of rfpFiles) {
-        try {
-          const text = await extractPdfText(file);
-          texts.push(`[${file.name}]\n${text.slice(0, 40000)}`);
-        } catch {
-          texts.push(`[${file.name}] (파싱 실패)`);
-        }
+    for (const file of rfpFiles) {
+      try {
+        contentParts.push(await toBase64Part(file));
+      } catch {
+        textSections.push(`[RFP: ${file.name}] (파싱 실패)`);
       }
-      rfpSection = texts.join('\n\n');
     }
 
-    // ② 제안서 예시 — 선택
+    // ② 제안서 예시 — PDF → GPT에 직접 전달
     const sampleFiles = formData.getAll('sampleFiles') as File[];
-    let sampleSection = '';
-    if (sampleFiles.length > 0) {
-      const texts: string[] = [];
-      for (const file of sampleFiles) {
-        try {
-          const text = await extractPdfText(file);
-          texts.push(`[예시: ${file.name}]\n${text.slice(0, 15000)}`);
-        } catch {
-          texts.push(`[예시: ${file.name}] (파싱 실패)`);
-        }
+    for (const file of sampleFiles) {
+      try {
+        contentParts.push(await toBase64Part(file));
+        textSections.push(`[제안서 예시 파일명: ${file.name}]`);
+      } catch {
+        textSections.push(`[제안서 예시: ${file.name}] (파싱 실패)`);
       }
-      sampleSection = `[제안서 예시]\n${texts.join('\n\n')}`;
     }
 
-    // ③ 과제 수행 리스트 — 선택
+    // ③ 과제 수행 리스트 — PDF는 직접, 텍스트 파일은 텍스트로
     const taskListFiles = formData.getAll('taskListFiles') as File[];
-    let taskListSection = '';
-    if (taskListFiles.length > 0) {
-      const texts: string[] = [];
-      for (const file of taskListFiles) {
-        try {
-          const text = await extractFileText(file);
-          texts.push(`[${file.name}]\n${text.slice(0, 20000)}`);
-        } catch {
-          texts.push(`[${file.name}] (파싱 실패)`);
+    const taskTexts: string[] = [];
+    for (const file of taskListFiles) {
+      try {
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        if (ext === 'pdf') {
+          contentParts.push(await toBase64Part(file));
+        } else {
+          taskTexts.push(await toTextPart(file));
         }
+      } catch {
+        taskTexts.push(`[${file.name}] (파싱 실패)`);
       }
-      taskListSection = `[아이피랩 수행 과제 리스트]\n${texts.join('\n\n')}`;
+    }
+    if (taskTexts.length > 0) {
+      textSections.push(`[아이피랩 수행 과제 리스트]\n${taskTexts.join('\n\n')}`);
     }
 
-    // ④ 가장 관련이 높은 이력사항 — 파일 또는 텍스트 (선택)
+    // ④ 관련 이력사항 — PDF는 직접, 텍스트 파일 또는 직접 입력
     const historyFiles = formData.getAll('historyFiles') as File[];
     const historyParts: string[] = [];
     for (const file of historyFiles) {
       try {
-        const text = await extractFileText(file);
-        historyParts.push(`[${file.name}]\n${text.slice(0, 10000)}`);
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        if (ext === 'pdf') {
+          contentParts.push(await toBase64Part(file));
+        } else {
+          historyParts.push(await toTextPart(file));
+        }
       } catch {
         historyParts.push(`[${file.name}] (파싱 실패)`);
       }
     }
-    if (historyText.trim()) {
-      historyParts.push(historyText.trim());
+    if (historyText.trim()) historyParts.push(historyText.trim());
+    if (historyParts.length > 0) {
+      textSections.push(`[가장 관련이 높은 이력사항]\n${historyParts.join('\n\n')}`);
     }
-    const historySection = historyParts.length > 0
-      ? `[가장 관련이 높은 이력사항]\n${historyParts.join('\n\n')}`
-      : '';
 
-    const userMessage = `기술 분야: ${technologyDomain}
+    const userText = [
+      `기술 분야: ${technologyDomain}`,
+      rfpFiles.length === 0 ? '[수요기업 기술자료(RFP)]: (제공 없음)' : '',
+      ...textSections,
+      '',
+      '위 정보를 기반으로 제안서를 S1부터 S4까지 자동 완주하여 최종 출력해주세요.',
+      '(※ 웹 검색 불가 환경입니다. 학습된 지식과 제공된 자료를 최대한 활용하여 구체적으로 작성해주세요.)',
+    ].filter(Boolean).join('\n');
 
-[수요기업 기술자료(RFP)]
-${rfpSection || '(제공된 RFP 없음)'}
-
-${sampleSection}
-
-${taskListSection}
-
-${historySection}
-
-위 정보를 기반으로 제안서를 S1부터 S4까지 자동 완주하여 최종 출력해주세요.
-(※ 현재 웹 검색이 불가능한 환경입니다. 학습된 지식과 제공된 자료 내용을 최대한 활용하여 구체적으로 작성해주세요.)`;
+    contentParts.push({ type: 'text', text: userText });
 
     const stream = await client.chat.completions.create({
       model: 'gpt-4o',
       max_tokens: 8192,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { role: 'user', content: contentParts as any },
       ],
       stream: true,
     });
@@ -122,9 +129,7 @@ ${historySection}
         try {
           for await (const chunk of stream) {
             const text = chunk.choices[0]?.delta?.content || '';
-            if (text) {
-              controller.enqueue(new TextEncoder().encode(text));
-            }
+            if (text) controller.enqueue(new TextEncoder().encode(text));
           }
           controller.close();
         } catch (err) {
