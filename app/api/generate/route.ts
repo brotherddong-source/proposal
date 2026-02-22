@@ -14,10 +14,19 @@ type TextContentPart = {
   text: string;
 };
 
+const MIME_MAP: Record<string, string> = {
+  pdf:  'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc:  'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls:  'application/vnd.ms-excel',
+};
+
 async function toBase64Part(file: File): Promise<FileContentPart> {
   const buffer = Buffer.from(await file.arrayBuffer());
   const base64 = buffer.toString('base64');
-  const mime = file.type || 'application/pdf';
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const mime = file.type || MIME_MAP[ext] || 'application/octet-stream';
   return {
     type: 'file',
     file: {
@@ -63,35 +72,34 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ③ 과제 수행 리스트 — PDF는 직접, 텍스트 파일은 텍스트로
+    // ③ 과제 수행 리스트 — 모든 파일 형식을 base64로 GPT에 직접 전달
     const taskListFiles = formData.getAll('taskListFiles') as File[];
-    const taskTexts: string[] = [];
     for (const file of taskListFiles) {
       try {
         const ext = file.name.split('.').pop()?.toLowerCase();
-        if (ext === 'pdf') {
-          contentParts.push(await toBase64Part(file));
+        if (ext === 'txt') {
+          // TXT는 텍스트로 읽어서 전달 (토큰 절약)
+          const text = await toTextPart(file);
+          textSections.push(`[아이피랩 수행 과제 리스트]\n${text}`);
         } else {
-          taskTexts.push(await toTextPart(file));
+          // PDF, DOCX, XLSX 등 → base64로 GPT에 직접 전달
+          contentParts.push(await toBase64Part(file));
         }
       } catch {
-        taskTexts.push(`[${file.name}] (파싱 실패)`);
+        textSections.push(`[${file.name}] (파싱 실패)`);
       }
     }
-    if (taskTexts.length > 0) {
-      textSections.push(`[아이피랩 수행 과제 리스트]\n${taskTexts.join('\n\n')}`);
-    }
 
-    // ④ 관련 이력사항 — PDF는 직접, 텍스트 파일 또는 직접 입력
+    // ④ 관련 이력사항 — 모든 파일 형식을 base64로 GPT에 직접 전달
     const historyFiles = formData.getAll('historyFiles') as File[];
     const historyParts: string[] = [];
     for (const file of historyFiles) {
       try {
         const ext = file.name.split('.').pop()?.toLowerCase();
-        if (ext === 'pdf') {
-          contentParts.push(await toBase64Part(file));
-        } else {
+        if (ext === 'txt') {
           historyParts.push(await toTextPart(file));
+        } else {
+          contentParts.push(await toBase64Part(file));
         }
       } catch {
         historyParts.push(`[${file.name}] (파싱 실패)`);
